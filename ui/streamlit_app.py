@@ -1,11 +1,21 @@
 """Streamlit UI for Agentic RAG System."""
 
 import streamlit as st
-import httpx
 import json
 import os
+import sys
+import asyncio
 from pathlib import Path
 from typing import Optional
+
+# Add parent directory to path for imports
+parent_dir = Path(__file__).parent.parent
+if str(parent_dir) not in sys.path:
+    sys.path.insert(0, str(parent_dir))
+
+# Import orchestrator and memory directly
+from src.core.orchestrator import get_orchestrator
+from src.memory.long_term_memory import LongTermMemory
 
 # Page configuration
 st.set_page_config(
@@ -14,46 +24,65 @@ st.set_page_config(
     layout="wide",
 )
 
-# API URL (can be configured)
-API_URL = "http://localhost:8000"
+
+@st.cache_resource
+def get_orchestrator_instance():
+    """Get cached orchestrator instance."""
+    return get_orchestrator()
 
 
 def query_api(query: str, tier: str, session_id: Optional[str] = None) -> dict:
-    """Query the API."""
+    """Query the orchestrator directly (no HTTP needed)."""
     try:
-        with httpx.Client(timeout=60.0) as client:
-            response = client.post(
-                f"{API_URL}/query",
-                json={
-                    "query": query,
-                    "tier": tier,
-                    "session_id": session_id,
-                },
+        orchestrator = get_orchestrator_instance()
+        # Run async function in sync context
+        # Use nest_asyncio to handle event loops in Streamlit
+        try:
+            import nest_asyncio
+            nest_asyncio.apply()
+        except ImportError:
+            pass  # If not available, try without it
+        
+        # Try to run the async function
+        try:
+            # Check if there's a running loop
+            asyncio.get_running_loop()
+            # If we get here, there's a running loop - nest_asyncio should handle it
+            response = asyncio.run(
+                orchestrator.process_query(
+                    query=query,
+                    tier=tier,
+                    session_id=session_id,
+                )
             )
-            response.raise_for_status()
-            return response.json()
+        except RuntimeError:
+            # No running loop, safe to use asyncio.run
+            response = asyncio.run(
+                orchestrator.process_query(
+                    query=query,
+                    tier=tier,
+                    session_id=session_id,
+                )
+            )
+        return response
     except Exception as e:
         return {"success": False, "error": str(e)}
 
 
 def get_agent_status() -> dict:
-    """Get agent status from API."""
+    """Get agent status directly from orchestrator."""
     try:
-        with httpx.Client(timeout=10.0) as client:
-            response = client.get(f"{API_URL}/agents")
-            response.raise_for_status()
-            return response.json()
+        orchestrator = get_orchestrator_instance()
+        return orchestrator.get_agent_status()
     except Exception as e:
         return {"error": str(e)}
 
 
 def get_system_info() -> dict:
-    """Get system information from API."""
+    """Get system information directly from orchestrator."""
     try:
-        with httpx.Client(timeout=10.0) as client:
-            response = client.get(f"{API_URL}/system")
-            response.raise_for_status()
-            return response.json()
+        orchestrator = get_orchestrator_instance()
+        return orchestrator.get_system_info()
     except Exception as e:
         return {"error": str(e)}
 
@@ -215,29 +244,26 @@ def main():
 
         if st.button("Load Memory"):
             try:
-                with httpx.Client(timeout=10.0) as client:
-                    response = client.get(f"{API_URL}/memory/{session_id}")
-                    response.raise_for_status()
-                    memory_data = response.json()
+                long_term_memory = LongTermMemory()
+                memories = long_term_memory.get_session_memories(session_id, limit=50)
+                
+                st.metric("Memories", len(memories))
 
-                    st.metric("Memories", memory_data.get("count", 0))
-
-                    if memory_data.get("memories"):
-                        st.subheader("Memory Entries")
-                        for memory in memory_data["memories"]:
-                            with st.expander(f"Memory: {memory.get('id', 'Unknown')[:8]}..."):
-                                st.text(memory.get("content", ""))
-                                st.json(memory.get("metadata", {}))
+                if memories:
+                    st.subheader("Memory Entries")
+                    for memory in memories:
+                        memory_id = memory.get('id', 'Unknown')
+                        with st.expander(f"Memory: {str(memory_id)[:8]}..."):
+                            st.text(memory.get("content", ""))
+                            st.json(memory.get("metadata", {}))
             except Exception as e:
                 st.error(f"Error loading memory: {e}")
 
         if st.button("Clear Memory", type="secondary"):
             try:
-                with httpx.Client(timeout=10.0) as client:
-                    response = client.delete(f"{API_URL}/memory/{session_id}")
-                    response.raise_for_status()
-                    result = response.json()
-                    st.success(f"Deleted {result.get('deleted', 0)} memories")
+                long_term_memory = LongTermMemory()
+                deleted_count = long_term_memory.delete_session_memories(session_id)
+                st.success(f"Deleted {deleted_count} memories")
             except Exception as e:
                 st.error(f"Error clearing memory: {e}")
 
@@ -247,12 +273,13 @@ def main():
         
         # Get document count
         try:
-            with httpx.Client(timeout=10.0) as client:
-                response = client.get(f"{API_URL}/system")
-                response.raise_for_status()
-                system_info = response.json()
+            system_info = get_system_info()
+            if "error" not in system_info:
                 doc_count = system_info.get("vector_store", {}).get("document_count", 0)
                 st.metric("Documents in Vector Store", doc_count)
+            else:
+                st.warning(f"Could not fetch document count: {system_info.get('error')}")
+                doc_count = 0
         except Exception as e:
             st.warning(f"Could not fetch document count: {e}")
             doc_count = 0

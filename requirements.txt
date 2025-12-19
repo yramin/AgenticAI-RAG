@@ -20,6 +20,7 @@ streamlit>=1.31.0
 tiktoken>=0.5.2
 numpy>=1.26.0
 aiofiles>=23.2.1
+nest-asyncio>=1.6.0  # For async handling in Streamlit
 
 # Testing
 pytest>=7.4.4
