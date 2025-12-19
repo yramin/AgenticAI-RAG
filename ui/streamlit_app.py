@@ -113,27 +113,36 @@ def query_api(query: str, tier: str, session_id: Optional[str] = None) -> dict:
     try:
         orchestrator = get_orchestrator_instance()
         # Run async function in sync context
-        # Use nest_asyncio to handle event loops in Streamlit
-        try:
-            import nest_asyncio
-            nest_asyncio.apply()
-        except ImportError:
-            pass  # If not available, try without it
-        
-        # Try to run the async function
+        # Handle different event loop scenarios (including uvloop)
         try:
             # Check if there's a running loop
-            asyncio.get_running_loop()
-            # If we get here, there's a running loop - nest_asyncio should handle it
-            response = asyncio.run(
-                orchestrator.process_query(
-                    query=query,
-                    tier=tier,
-                    session_id=session_id,
-                )
-            )
+            loop = asyncio.get_running_loop()
+            # If there's a running loop, we need to run in a new thread
+            # This handles uvloop and other non-patchable loops
+            import concurrent.futures
+            import threading
+            
+            def run_in_new_loop():
+                """Create a new event loop in this thread."""
+                new_loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(new_loop)
+                try:
+                    return new_loop.run_until_complete(
+                        orchestrator.process_query(
+                            query=query,
+                            tier=tier,
+                            session_id=session_id,
+                        )
+                    )
+                finally:
+                    new_loop.close()
+            
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                future = executor.submit(run_in_new_loop)
+                response = future.result(timeout=120)  # 2 minute timeout
         except RuntimeError:
             # No running loop, safe to use asyncio.run
+            # This creates a new event loop compatible with the current environment
             response = asyncio.run(
                 orchestrator.process_query(
                     query=query,
