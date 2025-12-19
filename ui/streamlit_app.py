@@ -16,6 +16,7 @@ if str(parent_dir) not in sys.path:
 # Import orchestrator and memory directly
 from src.core.orchestrator import get_orchestrator
 from src.memory.long_term_memory import LongTermMemory
+from src.retrieval.vector_store import get_vector_store
 
 # Page configuration
 st.set_page_config(
@@ -29,6 +30,82 @@ st.set_page_config(
 def get_orchestrator_instance():
     """Get cached orchestrator instance."""
     return get_orchestrator()
+
+
+@st.cache_resource
+def get_vector_store_instance():
+    """Get cached vector store instance."""
+    return get_vector_store()
+
+
+def add_text_documents(texts: list, metadatas: Optional[list] = None):
+    """Add text documents to the vector store."""
+    vector_store = get_vector_store_instance()
+    
+    if metadatas is None:
+        metadatas = [{}] * len(texts)
+    
+    ids = vector_store.add_documents(texts, metadatas)
+    return ids
+
+
+def add_file_documents(file_paths: list, chunk_size: int = 1000):
+    """Add documents from text files to the vector store."""
+    all_documents = []
+    all_metadatas = []
+    
+    for file_path in file_paths:
+        file_path = Path(file_path)
+        if not file_path.exists():
+            continue
+        
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+            
+            # Split large documents into chunks
+            if len(content) > chunk_size:
+                chunks = [content[i:i+chunk_size] for i in range(0, len(content), chunk_size)]
+                for i, chunk in enumerate(chunks):
+                    all_documents.append(chunk)
+                    all_metadatas.append({
+                        "source": str(file_path.name),
+                        "chunk": i + 1,
+                        "type": "file"
+                    })
+            else:
+                all_documents.append(content)
+                all_metadatas.append({
+                    "source": str(file_path.name),
+                    "type": "file"
+                })
+        except Exception as e:
+            st.error(f"Error reading {file_path}: {e}")
+    
+    if all_documents:
+        ids = add_text_documents(all_documents, all_metadatas)
+        return ids
+    else:
+        return []
+
+
+def add_from_directory(directory: str, extensions: list = None):
+    """Add all text files from a directory."""
+    if extensions is None:
+        extensions = ['.txt', '.md', '.py', '.json']
+    
+    directory = Path(directory)
+    if not directory.exists():
+        return []
+    
+    file_paths = []
+    for ext in extensions:
+        file_paths.extend(directory.glob(f"**/*{ext}"))
+    
+    if not file_paths:
+        return []
+    
+    return add_file_documents([str(f) for f in file_paths])
 
 
 def query_api(query: str, tier: str, session_id: Optional[str] = None) -> dict:
@@ -291,19 +368,54 @@ def main():
         st.markdown("Add pre-configured sample documents about Oracle Exadata migration.")
         if st.button("Add Sample Documents", type="primary"):
             try:
-                import subprocess
-                result = subprocess.run(
-                    ["python", "scripts/add_documents.py", "--sample-docs"],
-                    capture_output=True,
-                    text=True,
-                    cwd=Path(__file__).parent.parent
-                )
-                if result.returncode == 0:
-                    st.success("✅ Sample documents added successfully!")
-                    st.code(result.stdout)
-                    st.rerun()
-                else:
-                    st.error(f"Error: {result.stderr}")
+                # Sample documents from add_documents.py
+                sample_docs = [
+                    {
+                        "text": """
+                        Oracle Exadata is a database machine that combines hardware and software 
+                        to provide high-performance database solutions. When migrating Exadata 
+                        workloads to the cloud, it's important to consider compatibility, 
+                        performance, and feature parity.
+                        """,
+                        "metadata": {"source": "exadata_migration_guide", "type": "documentation"},
+                    },
+                    {
+                        "text": """
+                        Cloud migration strategies for Oracle Exadata include:
+                        1. Lift and shift - moving workloads with minimal changes
+                        2. Replatforming - adapting to cloud-native services
+                        3. Refactoring - redesigning for cloud architecture
+                        
+                        Each approach has different trade-offs in terms of effort, cost, and feature availability.
+                        """,
+                        "metadata": {"source": "migration_strategies", "type": "guide"},
+                    },
+                    {
+                        "text": """
+                        Oracle Cloud Infrastructure (OCI) provides Exadata Cloud Service which 
+                        maintains full feature compatibility with on-premises Exadata. This 
+                        service offers the same architecture and capabilities, making it ideal 
+                        for migrations requiring minimal changes.
+                        """,
+                        "metadata": {"source": "oci_exadata", "type": "cloud_service"},
+                    },
+                    {
+                        "text": """
+                        Oracle AI Database services on AWS provide customers with a simplified path 
+                        to migrate Oracle Exadata workloads. These services run on AWS infrastructure 
+                        and offer managed database solutions that maintain Oracle compatibility while 
+                        leveraging AWS cloud capabilities. The services include automated migration tools, 
+                        performance optimization, and seamless integration with AWS services.
+                        """,
+                        "metadata": {"source": "oracle_aws_services", "type": "cloud_service"},
+                    },
+                ]
+                
+                documents = [doc["text"].strip() for doc in sample_docs]
+                metadatas = [doc["metadata"] for doc in sample_docs]
+                ids = add_text_documents(documents, metadatas)
+                st.success(f"✅ Added {len(ids)} sample documents successfully!")
+                st.rerun()
             except Exception as e:
                 st.error(f"Error adding sample documents: {e}")
         
@@ -323,21 +435,9 @@ def main():
         
         if add_text_button and text_input:
             try:
-                import subprocess
-                # Escape the text for command line
-                import shlex
-                result = subprocess.run(
-                    ["python", "scripts/add_documents.py", "--text"] + [text_input],
-                    capture_output=True,
-                    text=True,
-                    cwd=Path(__file__).parent.parent
-                )
-                if result.returncode == 0:
-                    st.success("✅ Document added successfully!")
-                    st.code(result.stdout)
-                    st.rerun()
-                else:
-                    st.error(f"Error: {result.stderr}")
+                ids = add_text_documents([text_input])
+                st.success(f"✅ Document added successfully! (ID: {ids[0] if ids else 'N/A'})")
+                st.rerun()
             except Exception as e:
                 st.error(f"Error adding document: {e}")
         
@@ -355,7 +455,6 @@ def main():
             if st.button("Add Uploaded Files", type="primary"):
                 try:
                     import tempfile
-                    import subprocess
                     
                     file_paths = []
                     with tempfile.TemporaryDirectory() as tmpdir:
@@ -365,19 +464,9 @@ def main():
                                 f.write(uploaded_file.getbuffer())
                             file_paths.append(file_path)
                         
-                        result = subprocess.run(
-                            ["python", "scripts/add_documents.py", "--file"] + file_paths,
-                            capture_output=True,
-                            text=True,
-                            cwd=Path(__file__).parent.parent
-                        )
-                        
-                        if result.returncode == 0:
-                            st.success(f"✅ Added {len(uploaded_files)} file(s) successfully!")
-                            st.code(result.stdout)
-                            st.rerun()
-                        else:
-                            st.error(f"Error: {result.stderr}")
+                        ids = add_file_documents(file_paths)
+                        st.success(f"✅ Added {len(ids)} document(s) from {len(uploaded_files)} file(s) successfully!")
+                        st.rerun()
                 except Exception as e:
                     st.error(f"Error adding files: {e}")
         
@@ -395,19 +484,12 @@ def main():
         if st.button("Add from Directory"):
             if directory_path:
                 try:
-                    import subprocess
-                    result = subprocess.run(
-                        ["python", "scripts/add_documents.py", "--directory", directory_path],
-                        capture_output=True,
-                        text=True,
-                        cwd=Path(__file__).parent.parent
-                    )
-                    if result.returncode == 0:
-                        st.success("✅ Documents from directory added successfully!")
-                        st.code(result.stdout)
-                        st.rerun()
+                    ids = add_from_directory(directory_path)
+                    if ids:
+                        st.success(f"✅ Added {len(ids)} document(s) from directory successfully!")
                     else:
-                        st.error(f"Error: {result.stderr}")
+                        st.warning("⚠️  No documents found in the specified directory")
+                    st.rerun()
                 except Exception as e:
                     st.error(f"Error adding from directory: {e}")
             else:

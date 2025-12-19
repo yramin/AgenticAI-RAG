@@ -6,10 +6,38 @@ from pathlib import Path
 from typing import List, Dict, Optional
 
 # Add parent directory to path
-parent_dir = Path(__file__).parent.parent
-sys.path.insert(0, str(parent_dir))
+try:
+    parent_dir = Path(__file__).parent.parent
+    sys.path.insert(0, str(parent_dir))
+except (NameError, AttributeError):
+    # Handle case where __file__ is not available (e.g., when executed directly)
+    import os
+    parent_dir = Path(os.getcwd())
+    if str(parent_dir) not in sys.path:
+        sys.path.insert(0, str(parent_dir))
 
-from src.retrieval.vector_store import get_vector_store
+# Lazy import - only import when functions are actually called
+# This prevents import errors when the module is scanned but not used
+_vector_store = None
+_vector_store_error = None
+
+def _get_vector_store():
+    """Lazy import of vector store."""
+    global _vector_store, _vector_store_error
+    if _vector_store_error is not None:
+        raise _vector_store_error
+    if _vector_store is None:
+        try:
+            from src.retrieval.vector_store import get_vector_store
+            _vector_store = get_vector_store()
+        except ImportError as e:
+            _vector_store_error = ImportError(
+                f"Failed to import vector store. Make sure all dependencies (including chromadb) are installed. "
+                f"Run: pip install -r requirements.txt\n"
+                f"Original error: {e}"
+            )
+            raise _vector_store_error
+    return _vector_store
 
 
 def add_text_documents(texts: List[str], metadatas: Optional[List[Dict]] = None):
@@ -20,7 +48,7 @@ def add_text_documents(texts: List[str], metadatas: Optional[List[Dict]] = None)
         texts: List of document texts
         metadatas: Optional list of metadata dictionaries
     """
-    vector_store = get_vector_store()
+    vector_store = _get_vector_store()
     
     if metadatas is None:
         metadatas = [{}] * len(texts)

@@ -7,11 +7,21 @@ from pathlib import Path
 parent_dir = Path(__file__).parent.parent
 sys.path.insert(0, str(parent_dir))
 
-from src.retrieval.vector_store import get_vector_store
+# Lazy import to avoid issues when module is scanned but not used
+def _get_vector_store():
+    """Lazy import of vector store."""
+    try:
+        from src.retrieval.vector_store import get_vector_store
+        return get_vector_store()
+    except ImportError as e:
+        raise ImportError(
+            f"Failed to import vector store. Make sure all dependencies are installed. "
+            f"Original error: {e}"
+        )
 
 def add_sample_documents():
     """Add sample documents to the vector store."""
-    vector_store = get_vector_store()
+    vector_store = _get_vector_store()
     
     sample_docs = [
         {
